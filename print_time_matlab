@@ -6,9 +6,9 @@ function print_time_warning(warning)
 
 if warning
     % ดึงเวลาปัจจุบัน
-    current_time = datetime('now');
+    current_time = datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss');
     
     % พิมพ์เวลาปัจจุบันพร้อมข้อความ
-    fprintf('[%s] Published crash warning: %d\n', datestr(current_time, 'yyyy-mm-dd HH:MM:SS'), warning);
+    fprintf('[%s] Published crash warning: %d\n', char(current_time), warning);
 end
 end
