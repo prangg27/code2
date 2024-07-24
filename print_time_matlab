@@ -1,14 +1,11 @@
-function print_time_warning(warning)
+function fcn(t)
 %#codegen
+coder.extrinsic('fprintf');
+persistent firstTime
 
-% รับค่า warning จาก input
-% warning คือสัญญาณ boolean ที่บ่งบอกว่ามีการเตือนหรือไม่
+if isempty(firstTime)
+    firstTime = false;
+    fprintf('Starting Now\n');
+end
 
-if warning
-    % ดึงเวลาปัจจุบัน
-    current_time = datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss');
-    
-    % พิมพ์เวลาปัจจุบันพร้อมข้อความ
-    fprintf('[%s] Published crash warning: %d\n', char(current_time), warning);
-end
-end
+fprintf('time = %.4f\n',t);
