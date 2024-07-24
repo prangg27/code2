@@ -1,6 +1,7 @@
 function fcn(t)
 %#codegen
-coder.extrinsic('fprintf');
+coder.extrinsic('fprintf', 'datetime');
+
 persistent firstTime
 
 if isempty(firstTime)
@@ -8,4 +9,6 @@ if isempty(firstTime)
     fprintf('Starting Now\n');
 end
 
-fprintf('time = %.4f\n',t);
+% Get the current date and time
+currentTime = datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss.SSS');
+fprintf('time = %.4f, current time = %s\n', t, char(currentTime));
