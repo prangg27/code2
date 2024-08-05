@@ -1,16 +1,1 @@
-function fcn(t)
-%#codegen
-coder.extrinsic('fprintf');
-persistent firstTime
-
-if isempty(firstTime)
-    firstTime = false;
-    fprintf('Starting Now\n');
-end
-
-if t == true
-    currentTime = datetime('now');
-    fprintf('Current time = %s\n', datestr(currentTime, 'HH:MM:SS'));
-else
-    fprintf('time = %.4f\n', t);
-end
+C:\Windows\System32\carla_ws\src\carla_pkg\scripts>
