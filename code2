@@ -1,0 +1,148 @@
+import carla
+import math
+from random import choice
+import numpy as np
+import cv2
+import open3d as o3d
+from matplotlib import cm
+import rclpy
+from rclpy.node import Node
+import sensor_msgs.msg
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Header, Int8
+from PIL import Image as img
+from ctypes import *
+from geometry_msgs.msg import Twist, Quaternion
+from time import sleep
+import threading
+from rclpy.qos import qos_profile_sensor_data
+
+def ros_thread():
+    rclpy.init()
+    global carla_node, lidarpub, cmd_sub_m, cmd_pub_m, cmd_pub_a, cmd_pub_c, state_pub, imgpub
+
+    carla_node = rclpy.create_node('carla')
+
+    imgpub = carla_node.create_publisher(sensor_msgs.msg.CompressedImage, 'Carla/camera', 10)
+    lidarpub = carla_node.create_publisher(sensor_msgs.msg.PointCloud2, 'Carla/lidar', 10)
+    cmd_sub_m = carla_node.create_subscription(Twist, 'Carla/cmd_vel_m', callback_m, 10)
+    cmd_pub_m = carla_node.create_publisher(Twist, 'Carla/cmd_vel_m', 10)
+    cmd_pub_a = carla_node.create_publisher(Twist, 'Carla/cmd_vel_a', 10)
+    cmd_pub_c = carla_node.create_publisher(Twist, 'Carla/cmd_vel_c', 10)
+    state_pub = carla_node.create_publisher(Int8, 'Carla/state', 10)
+    rclpy.spin(carla_node)
+    carla_node.destroy_node()
+    rclpy.shutdown()
+
+def convertCloudFromOpen3dToRos(open3d_cloud, node, frame_id="odom"):
+    FIELDS_XYZ = [
+        sensor_msgs.msg.PointField(name='x', offset=0, datatype=sensor_msgs.msg.PointField.FLOAT32, count=1),
+        sensor_msgs.msg.PointField(name='y', offset=4, datatype=sensor_msgs.msg.PointField.FLOAT32, count=1),
+        sensor_msgs.msg.PointField(name='z', offset=8, datatype=sensor_msgs.msg.PointField.FLOAT32, count=1),
+    ]
+    FIELDS_XYZRGB = FIELDS_XYZ + [
+        sensor_msgs.msg.PointField(name='rgb', offset=12, datatype=sensor_msgs.msg.PointField.UINT32, count=1)
+    ]
+
+    BIT_MOVE_16 = 2 ** 16
+    BIT_MOVE_8 = 2 ** 8
+    convert_rgbUint32_to_tuple = lambda rgb_uint32: (
+        (rgb_uint32 & 0x00ff0000) >> 16, (rgb_uint32 & 0x0000ff00) >> 8, (rgb_uint32 & 0x000000ff)
+    )
+    convert_rgbFloat_to_tuple = lambda rgb_float: convert_rgbUint32_to_tuple(
+        int(cast(pointer(c_float(rgb_float)), POINTER(c_uint32)).contents.value)
+    )
+
+    header = Header()
+    header.stamp = node.get_clock().now().to_msg()
+    header.frame_id = frame_id
+
+    points = np.asarray(open3d_cloud.points)
+    if not open3d_cloud.colors:
+        fields = FIELDS_XYZ
+        cloud_data = points
+    else:
+        fields = FIELDS_XYZRGB
+        colors = np.floor(np.asarray(open3d_cloud.colors) * 255)
+        colors = colors[:, 0] * BIT_MOVE_16 + colors[:, 1] * BIT_MOVE_8 + colors[:, 2]
+        cloud_data = np.c_[points, colors]
+
+    return point_cloud2.create_cloud(header, fields, cloud_data)
+
+def callback_m(twist_msg):
+    global velo_m, dir_m
+    velo_m = twist_msg.linear.x
+    dir_m = -1 * twist_msg.angular.z
+
+def ros_imgpub(node):
+    im = sensor_data['rgb_image']
+    _, buffer = cv2.imencode('.jpg', im)
+    immsg = sensor_msgs.msg.CompressedImage()
+    immsg.header.stamp = node.get_clock().now().to_msg()
+    immsg.format = "jpeg"
+    immsg.data = np.array(buffer).tobytes()
+    imgpub.publish(immsg)
+
+def lidar_callback(point_cloud, point_list, node):
+    data = np.copy(np.frombuffer(point_cloud.raw_data, dtype=np.dtype('f4')))
+    data = np.reshape(data, (int(data.shape[0] / 4), 4))
+
+    intensity = data[:, -1]
+    intensity_col = 1.0 - np.log(intensity) / np.log(np.exp(-0.004 * 100))
+    int_color = np.c_[
+        np.interp(intensity_col, VID_RANGE, VIRIDIS[:, 0]),
+        np.interp(intensity_col, VID_RANGE, VIRIDIS[:, 1]),
+        np.interp(intensity_col, VID_RANGE, VIRIDIS[:, 2])]
+
+    points = data[:, :-1]
+    points[:, :1] = -points[:, :1]
+
+    point_list.points = o3d.utility.Vector3dVector(points)
+    lidar_msg = convertCloudFromOpen3dToRos(point_list, node)
+    lidarpub.publish(lidar_msg)
+
+def camera_callback(image, data_dict, node):
+    data_dict['rgb_image'] = np.reshape(np.copy(image.raw_data), (image.height, image.width, 4))
+    cv2.imwrite('rgb_img.png', sensor_data['rgb_image'])
+    ros_imgpub(node)
+
+def add_open3d_axis(vis):
+    axis = o3d.geometry.LineSet()
+    axis.points = o3d.utility.Vector3dVector(np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0]]))
+    axis.lines = o3d.utility.Vector2iVector(np.array([
+        [0, 1],
+        [0, 2],
+        [0, 3]]))
+    axis.colors = o3d.utility.Vector3dVector(np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0]]))
+    vis.add_geometry(axis)
+
+def build_projection_matrix(w, h, fov):
+    focal = w / (2.0 * np.tan(fov * np.pi / 360.0))
+    K = np.identity(3)
+    K[0, 0] = K[1, 1] = focal
+    K[0, 2] = w / 2.0
+    K[1, 2] = h / 2.0
+    return K
+
+def get_image_point(loc, K, w2c):
+    point = np.array([loc.x, loc.y, loc.z, 1])
+    point_camera = np.dot(w2c, point)
+    point_camera = [point_camera[1], -point_camera[2], point_camera[0]]
+    point_img = np.dot(K, point_camera)
+    point_img[0] /= point_img[2]
+    point_img[1] /= point_img[2]
+    return tuple(map(int, point_img[0:2]))
+
+def spawn_scenario():
+    bikeman_bp = bp_lib.find('vehicle.bh.crossbike')
+    bikeman_loc = carla.Location(x=-32, y=80.5, z=0.4)
+    bikeman_rot = carla.Rotation(pitch=0, yaw=-90, roll=0.0)
+    bikeman_trans = carla.Transform(bikeman_loc, bikeman_rot)
+    bikeman = world.spawn_actor(bikeman_bp, bik
