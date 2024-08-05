@@ -217,7 +217,7 @@ world = client.get_world()
 #world.set_weather(carla.WeatherParameters.CloudyNight)
 bp_lib = world.get_blueprint_library() 
 
-checkerboard_bp = bp_lib.find('static.prop.static_checkerboard')
+checkerboard_bp = bp_lib.filter('checkerboard.*')[0]
 spawn_point = carla.Transform(carla.Location(x=0, y=0, z=2))
 checkerboard = world.spawn_actor(checkerboard_bp, spawn_point)
 
