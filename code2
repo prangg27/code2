@@ -12,19 +12,21 @@ from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Header, Int8
 from PIL import Image as img
 from ctypes import *
-from geometry_msgs.msg import Twist, Quaternion
+from geometry_msgs.msg import Twist
 from time import sleep
 import threading
+import socket
+import pickle
+import struct
 from rclpy.qos import qos_profile_sensor_data
 
 def ros_thread():
     rclpy.init()
-    global carla_node, lidarpub, cmd_sub_m, cmd_pub_m, cmd_pub_a, cmd_pub_c, state_pub, imgpub
+    global carla_node, imgpub, cmd_sub_m, cmd_pub_a, cmd_pub_m, cmd_pub_c, state_pub
 
     carla_node = rclpy.create_node('carla')
 
     imgpub = carla_node.create_publisher(sensor_msgs.msg.CompressedImage, 'Carla/camera', 10)
-    lidarpub = carla_node.create_publisher(sensor_msgs.msg.PointCloud2, 'Carla/lidar', 10)
     cmd_sub_m = carla_node.create_subscription(Twist, 'Carla/cmd_vel_m', callback_m, 10)
     cmd_pub_m = carla_node.create_publisher(Twist, 'Carla/cmd_vel_m', 10)
     cmd_pub_a = carla_node.create_publisher(Twist, 'Carla/cmd_vel_a', 10)
@@ -34,45 +36,10 @@ def ros_thread():
     carla_node.destroy_node()
     rclpy.shutdown()
 
-def convertCloudFromOpen3dToRos(open3d_cloud, node, frame_id="odom"):
-    FIELDS_XYZ = [
-        sensor_msgs.msg.PointField(name='x', offset=0, datatype=sensor_msgs.msg.PointField.FLOAT32, count=1),
-        sensor_msgs.msg.PointField(name='y', offset=4, datatype=sensor_msgs.msg.PointField.FLOAT32, count=1),
-        sensor_msgs.msg.PointField(name='z', offset=8, datatype=sensor_msgs.msg.PointField.FLOAT32, count=1),
-    ]
-    FIELDS_XYZRGB = FIELDS_XYZ + [
-        sensor_msgs.msg.PointField(name='rgb', offset=12, datatype=sensor_msgs.msg.PointField.UINT32, count=1)
-    ]
-
-    BIT_MOVE_16 = 2 ** 16
-    BIT_MOVE_8 = 2 ** 8
-    convert_rgbUint32_to_tuple = lambda rgb_uint32: (
-        (rgb_uint32 & 0x00ff0000) >> 16, (rgb_uint32 & 0x0000ff00) >> 8, (rgb_uint32 & 0x000000ff)
-    )
-    convert_rgbFloat_to_tuple = lambda rgb_float: convert_rgbUint32_to_tuple(
-        int(cast(pointer(c_float(rgb_float)), POINTER(c_uint32)).contents.value)
-    )
-
-    header = Header()
-    header.stamp = node.get_clock().now().to_msg()
-    header.frame_id = frame_id
-
-    points = np.asarray(open3d_cloud.points)
-    if not open3d_cloud.colors:
-        fields = FIELDS_XYZ
-        cloud_data = points
-    else:
-        fields = FIELDS_XYZRGB
-        colors = np.floor(np.asarray(open3d_cloud.colors) * 255)
-        colors = colors[:, 0] * BIT_MOVE_16 + colors[:, 1] * BIT_MOVE_8 + colors[:, 2]
-        cloud_data = np.c_[points, colors]
-
-    return point_cloud2.create_cloud(header, fields, cloud_data)
-
-def callback_m(twist_msg):
+def callback_m(Twist):
     global velo_m, dir_m
-    velo_m = twist_msg.linear.x
-    dir_m = -1 * twist_msg.angular.z
+    velo_m = Twist.linear.x
+    dir_m = -1 * Twist.angular.z
 
 def ros_imgpub(node):
     im = sensor_data['rgb_image']
@@ -82,24 +49,6 @@ def ros_imgpub(node):
     immsg.format = "jpeg"
     immsg.data = np.array(buffer).tobytes()
     imgpub.publish(immsg)
-
-def lidar_callback(point_cloud, point_list, node):
-    data = np.copy(np.frombuffer(point_cloud.raw_data, dtype=np.dtype('f4')))
-    data = np.reshape(data, (int(data.shape[0] / 4), 4))
-
-    intensity = data[:, -1]
-    intensity_col = 1.0 - np.log(intensity) / np.log(np.exp(-0.004 * 100))
-    int_color = np.c_[
-        np.interp(intensity_col, VID_RANGE, VIRIDIS[:, 0]),
-        np.interp(intensity_col, VID_RANGE, VIRIDIS[:, 1]),
-        np.interp(intensity_col, VID_RANGE, VIRIDIS[:, 2])]
-
-    points = data[:, :-1]
-    points[:, :1] = -points[:, :1]
-
-    point_list.points = o3d.utility.Vector3dVector(points)
-    lidar_msg = convertCloudFromOpen3dToRos(point_list, node)
-    lidarpub.publish(lidar_msg)
 
 def camera_callback(image, data_dict, node):
     data_dict['rgb_image'] = np.reshape(np.copy(image.raw_data), (image.height, image.width, 4))
@@ -145,4 +94,214 @@ def spawn_scenario():
     bikeman_loc = carla.Location(x=-32, y=80.5, z=0.4)
     bikeman_rot = carla.Rotation(pitch=0, yaw=-90, roll=0.0)
     bikeman_trans = carla.Transform(bikeman_loc, bikeman_rot)
-    bikeman = world.spawn_actor(bikeman_bp, bik
+    bikeman = world.spawn_actor(bikeman_bp, bikeman_trans)
+    bikeman_velo = carla.Vector3D(x=0.8, y=0, z=0)
+    bikeman.set_target_velocity(bikeman_velo)
+    bikeman.enable_constant_velocity(bikeman_velo)
+    print("spawn done")
+
+def add_checkerboard(image):
+    array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+    array = np.reshape(array, (image.height, image.width, 4))
+    array = array[:, :, :3]
+
+    checkerboard_size = (7, 7)
+    square_size = 50
+
+    for y in range(0, checkerboard_size[1]):
+        for x in range(0, checkerboard_size[0]):
+            x_start = x * square_size
+            y_start = y * square_size
+            color = 255 if (x + y) % 2 == 0 else 0
+            cv2.rectangle(array, (x_start, y_start), (x_start + square_size, y_start + square_size), (color, color, color), -1)
+
+    cv2.imshow("Camera", array)
+    cv2.waitKey(1)
+
+print("start")
+velo_m = 0
+dir_m = 0
+show_info = True
+demo_running = False
+velo_gain = 0.1
+numofnpc = 0
+
+ros2_thread = threading.Thread(target=ros_thread, daemon=True)
+ros2_thread.start()
+
+client = carla.Client('192.168.1.3', 2000)
+client.set_timeout(10)
+client.load_world('Town10HD')
+world = client.get_world()
+
+bp_lib = world.get_blueprint_library()
+
+spawn_points = world.get_map().get_spawn_points()
+spawn_point = carla.Transform(carla.Location(10, 29, 0.6), carla.Rotation(0, -180, 0))
+
+vehicle_bp = bp_lib.find('vehicle.tesla.model3')
+vehicle_auto = world.try_spawn_actor(vehicle_bp, spawn_point)
+
+spawn_point = carla.Transform(carla.Location(97, 29, 0.6), carla.Rotation(0, -180, 0))
+vehicle_bp = bp_lib.find('vehicle.tesla.model3')
+vehicle_manual = world.try_spawn_actor(vehicle_bp, spawn_point)
+
+spectator = world.get_spectator()
+transform = carla.Transform(vehicle_manual.get_transform().transform(carla.Location(x=-4, z=2.5)), vehicle_manual.get_transform().rotation)
+spectator.set_transform(transform)
+
+for i in range(numofnpc):
+    vehicle_bp = choice(bp_lib.filter('vehicle'))
+    npc = world.try_spawn_actor(vehicle_bp, choice(spawn_points))
+
+for v in world.get_actors().filter('*vehicle*'):
+    v.set_autopilot(True)
+vehicle_manual.set_autopilot(False)
+vehicle_auto.set_autopilot(False)
+
+VIRIDIS = np.array(cm.get_cmap('plasma').colors)
+VID_RANGE = np.linspace(0.0, 1.0, VIRIDIS.shape[0])
+
+camera_bp = bp_lib.find('sensor.camera.rgb')
+camera_bp.set_attribute('image_size_x', '640')
+camera_bp.set_attribute('image_size_y', '480')
+camera_bp.set_attribute('fov', '110')
+camera_init_trans = carla.Transform(carla.Location(x=-1, y=1, z=5), carla.Rotation(pitch=0))
+camera = world.spawn_actor(camera_bp, camera_init_trans, attach_to=vehicle_manual)
+camera.listen(lambda image: add_checkerboard(image))
+
+image_w = camera_bp.get_attribute("image_size_x").as_int()
+image_h = camera_bp.get_attribute("image_size_y").as_int()
+sensor_data = {'image': np.zeros((image_h, image_w, 4))}
+fov = camera_bp.get_attribute("fov").as_float()
+
+K = build_projection_matrix(image_w, image_h, fov)
+
+world_2_camera = np.array(camera.get_transform().get_inverse_matrix())
+
+camera.listen(lambda image: camera_callback(image, sensor_data, carla_node))
+
+sensor_data = {'rgb_image': np.zeros((image_h, image_w, 4))}
+display_img = sensor_data['rgb_image'].copy()
+
+font = cv2.FONT_HERSHEY_SIMPLEX
+bottomLeftCornerOfText = (10, 50)
+fontScale = 0.5
+fontColor = (255, 255, 255)
+thickness = 2
+lineType = 2
+
+frame = 0
+
+event_location = [-41.5, 90]
+event_occur = False
+
+cur_location = [87, 29]
+
+spd_m = velo_m
+spd_a = 0
+steer_m = -45
+stage_m = 1
+stage_a = 1
+spd_pub_m = 3
+spd_pub_a = 4
+f_stop = False
+f_slow = False
+Sw_Mem_Positive = 0
+N_m = 0
+N_a = 0
+
+prev_ang_a = 0
+prev_ang_m = 0
+
+print("start demo")
+while True:
+    transform = carla.Transform(vehicle_manual.get_transform().transform(carla.Location(x=-4, z=2.5)), vehicle_manual.get_transform().rotation)
+    spectator.set_transform(transform)
+    frame += 1
+    if frame == 100:
+        spawn_scenario()
+
+    if frame > 200 and demo_running:
+
+        v = vehicle_manual.get_velocity()
+        vehicle_speed = math.sqrt(v.x**2 + v.y**2 + v.z**2)
+        vehicle_speed = 3.6 * vehicle_speed
+
+        cur_location[0] = vehicle_manual.get_location().x
+        cur_location[1] = vehicle_manual.get_location().y
+
+        cmd_m = Twist()
+        cmd_a = Twist()
+        cmd_c = Twist()
+
+        if f_stop:
+            cmd_m.linear.x = 0
+            cmd_m.angular.z = 0
+            cmd_pub_m.publish(cmd_m)
+            cmd_pub_c.publish(cmd_m)
+            stage_m = 0
+
+        if stage_m == 1:
+            cmd_m.linear.x = spd_m
+            cmd_m.angular.z = math.radians(steer_m)
+            if vehicle_speed < spd_pub_m:
+                cmd_pub_m.publish(cmd_m)
+                cmd_pub_c.publish(cmd_m)
+            if vehicle_speed >= spd_pub_m:
+                cmd_m.linear.x = 0
+                cmd_m.angular.z = 0
+                cmd_pub_m.publish(cmd_m)
+                cmd_pub_c.publish(cmd_m)
+                stage_m = 2
+
+        if stage_m == 2:
+            spd_m = -velo_m
+            steer_m = 45
+            cmd_m.linear.x = spd_m
+            cmd_m.angular.z = math.radians(steer_m)
+            cmd_pub_m.publish(cmd_m)
+            cmd_pub_c.publish(cmd_m)
+            stage_m = 3
+
+        if stage_m == 3:
+            if cur_location[0] < 75:
+                cmd_m.linear.x = 0
+                cmd_m.angular.z = 0
+                cmd_pub_m.publish(cmd_m)
+                cmd_pub_c.publish(cmd_m)
+                stage_m = 4
+
+        if stage_m == 4:
+            steer_m = 0
+            spd_m = velo_m
+            cmd_m.linear.x = spd_m
+            cmd_m.angular.z = math.radians(steer_m)
+            cmd_pub_m.publish(cmd_m)
+            cmd_pub_c.publish(cmd_m)
+            stage_m = 5
+
+        if stage_m == 5:
+            if cur_location[0] < 20:
+                f_stop = True
+
+        if event_occur:
+            cmd_m.linear.x = 0
+            cmd_m.angular.z = 0
+            cmd_pub_m.publish(cmd_m)
+            cmd_pub_c.publish(cmd_m)
+            state_pub.publish(1)
+
+        display_img = sensor_data['rgb_image'].copy()
+        display_img = cv2.putText(display_img, f"SPD_M: {spd_m:.2f}", bottomLeftCornerOfText, font, fontScale, fontColor, thickness, lineType)
+        display_img = cv2.putText(display_img, f"DIR_M: {steer_m:.2f}", (10, 70), font, fontScale, fontColor, thickness, lineType)
+        display_img = cv2.putText(display_img, f"STAGE_M: {stage_m}", (10, 90), font, fontScale, fontColor, thickness, lineType)
+        display_img = cv2.putText(display_img, f"SPD_A: {spd_a:.2f}", (10, 110), font, fontScale, fontColor, thickness, lineType)
+        display_img = cv2.putText(display_img, f"SPD_PUB_M: {spd_pub_m:.2f}", (10, 130), font, fontScale, fontColor, thickness, lineType)
+        display_img = cv2.putText(display_img, f"SPD_PUB_A: {spd_pub_a:.2f}", (10, 150), font, fontScale, fontColor, thickness, lineType)
+        display_img = cv2.putText(display_img, f"F_STOP: {f_stop}", (10, 170), font, fontScale, fontColor, thickness, lineType)
+        display_img = cv2.putText(display_img, f"F_SLOW: {f_slow}", (10, 190), font, fontScale, fontColor, thickness, lineType)
+
+        if show_info:
+            cv2.imshow("RGB Camera", display_img)
+            cv2.waitKey(1)
