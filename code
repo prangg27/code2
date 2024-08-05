@@ -1,7 +1,197 @@
-import carla
-import cv2
+import carla 
+import math 
+from random import choice
 import numpy as np
-import time
+import cv2
+import open3d as o3d
+from matplotlib import cm
+# import rospy
+import rclpy
+from rclpy.node import Node
+import sensor_msgs.msg
+# from sensor_msgs import point_cloud2
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Header,Bool,Int8
+from PIL import Image as img
+from ctypes import *
+from geometry_msgs.msg import Twist,Vector3,Quaternion
+from math import sqrt
+from time import sleep
+import threading
+import socket
+import pickle
+import struct
+from rclpy.qos import qos_profile_sensor_data
+
+def ros_thread():
+    rclpy.init()
+    global carla_node,lidarpub,cmd_sub_m,cmd_sub_a,cmd_pub_a,cmd_pub_m,cmd_pub_c,state_pub
+    global imgpub
+
+    carla_node = rclpy.create_node('carla')
+
+    imgpub = carla_node.create_publisher(sensor_msgs.msg.CompressedImage,'Carla/camera',10)
+    lidarpub = carla_node.create_publisher(sensor_msgs.msg.PointCloud2,'Carla/lidar',10)
+    cmd_sub_m = carla_node.create_subscription(Twist,'Carla/cmd_vel_m', callback_m, 10) 
+    # cmd_sub_a = carla_node.create_subscription(Twist,'Carla/cmd_vel_a', callback_a, 10) 
+    cmd_pub_m = carla_node.create_publisher(Twist,'Carla/cmd_vel_m', 10) 
+    cmd_pub_a = carla_node.create_publisher(Twist,'Carla/cmd_vel_a', 10) 
+    cmd_pub_c = carla_node.create_publisher(Twist,'Carla/cmd_vel_c', 10)
+    state_pub = carla_node.create_publisher(Int8,'Carla/state', 10) 
+    rclpy.spin(carla_node)
+    carla_node.destroy_node()
+    rclpy.shutdown()
+
+# Convert the datatype of point cloud from Open3D to ROS PointCloud2 (XYZRGB only)
+def convertCloudFromOpen3dToRos(open3d_cloud, node, frame_id="odom"):
+
+    # The data structure of each point in ros PointCloud2: 16 bits = x + y + z + rgb
+    FIELDS_XYZ = [
+    sensor_msgs.msg.PointField(name='x', offset=0, datatype=sensor_msgs.msg.PointField.FLOAT32, count=1),
+    sensor_msgs.msg.PointField(name='y', offset=4, datatype=sensor_msgs.msg.PointField.FLOAT32, count=1),
+    sensor_msgs.msg.PointField(name='z', offset=8, datatype=sensor_msgs.msg.PointField.FLOAT32, count=1),
+    ]
+    FIELDS_XYZRGB = FIELDS_XYZ + \
+    [sensor_msgs.msg.PointField(name='rgb', offset=12, datatype=sensor_msgs.msg.PointField.UINT32, count=1)]
+
+    # Bit operations
+    BIT_MOVE_16 = 2**16
+    BIT_MOVE_8 = 2**8
+    convert_rgbUint32_to_tuple = lambda rgb_uint32: (
+    (rgb_uint32 & 0x00ff0000)>>16, (rgb_uint32 & 0x0000ff00)>>8, (rgb_uint32 & 0x000000ff)
+    )
+    convert_rgbFloat_to_tuple = lambda rgb_float: convert_rgbUint32_to_tuple(
+        int(cast(pointer(c_float(rgb_float)), POINTER(c_uint32)).contents.value)
+    )
+    # Set "header"
+    header = Header()
+    header.stamp = node.get_clock().now().to_msg()
+    header.frame_id = frame_id
+
+    # Set "fields" and "cloud_data"
+    points=np.asarray(open3d_cloud.points)
+    if not open3d_cloud.colors: # XYZ only
+        fields=FIELDS_XYZ
+        cloud_data=points
+    else: # XYZ + RGB
+        fields=FIELDS_XYZRGB
+        # -- Change rgb color from "three float" to "one 24-byte int"
+        # 0x00FFFFFF is white, 0x00000000 is black.
+        colors = np.floor(np.asarray(open3d_cloud.colors)*255) # nx3 matrix
+        colors = colors[:,0] * BIT_MOVE_16 +colors[:,1] * BIT_MOVE_8 + colors[:,2]  
+        cloud_data=np.c_[points, colors]
+    
+    # create ros_cloud
+    return point_cloud2.create_cloud(header, fields, cloud_data)
+
+    
+def callback_m(Twist):
+    global velo_m,dir_m
+    velo_m = Twist.linear.x
+    dir_m = -1 * (Twist.angular.z)
+
+
+
+
+def ros_imgpub(node):
+  
+    im = sensor_data['rgb_image']
+    _, buffer = cv2.imencode('.jpg',im)
+    immsg = sensor_msgs.msg.CompressedImage()
+    immsg.header.stamp = node.get_clock().now().to_msg()
+    immsg.format = "jpeg"
+    immsg.data = np.array(buffer).tobytes()
+    imgpub.publish(immsg)
+
+def lidar_callback(point_cloud, point_list, node):
+    data = np.copy(np.frombuffer(point_cloud.raw_data, dtype=np.dtype('f4')))
+    data = np.reshape(data, (int(data.shape[0] / 4), 4))
+
+    # Isolate the intensity and compute a color for it
+    intensity = data[:, -1]
+    intensity_col = 1.0 - np.log(intensity) / np.log(np.exp(-0.004 * 100))
+    int_color = np.c_[
+        np.interp(intensity_col, VID_RANGE, VIRIDIS[:, 0]),
+        np.interp(intensity_col, VID_RANGE, VIRIDIS[:, 1]),
+        np.interp(intensity_col, VID_RANGE, VIRIDIS[:, 2])]
+
+    points = data[:, :-1]
+
+    points[:, :1] = -points[:, :1]
+
+    point_list.points = o3d.utility.Vector3dVector(points)
+    #point_list.colors = o3d.utility.Vector3dVector(int_color)
+
+    #send lidar via ros
+    lidar_msg = convertCloudFromOpen3dToRos(point_list, node)
+    #lidarpub.publish(lidar_msg)
+
+def camera_callback(image, data_dict, node):
+    data_dict['rgb_image'] = np.reshape(np.copy(image.raw_data), (image.height, image.width, 4))
+    cv2.imwrite('rgb_img.png',sensor_data['rgb_image'])
+    ros_imgpub(node)
+    # socket_imgpub(sensor_data['rgb_image'])
+
+
+def add_open3d_axis(vis):
+    """Add a small 3D axis on Open3D Visualizer"""
+    axis = o3d.geometry.LineSet()
+    axis.points = o3d.utility.Vector3dVector(np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0]]))
+    axis.lines = o3d.utility.Vector2iVector(np.array([
+        [0, 1],
+        [0, 2],
+        [0, 3]]))
+    axis.colors = o3d.utility.Vector3dVector(np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0]]))
+    vis.add_geometry(axis)
+
+# Auxilliary geometry functions for transforming to screen coordinates
+def build_projection_matrix(w, h, fov):
+    focal = w / (2.0 * np.tan(fov * np.pi / 360.0))
+    K = np.identity(3)
+    K[0, 0] = K[1, 1] = focal
+    K[0, 2] = w / 2.0
+    K[1, 2] = h / 2.0
+    return K
+
+def get_image_point(loc, K, w2c):
+        # Calculate 2D projection of 3D coordinate
+
+        # Format the input coordinate (loc is a carla.Position object)
+        point = np.array([loc.x, loc.y, loc.z, 1])
+        # transform to camera coordinates
+        point_camera = np.dot(w2c, point)
+
+        # New we must change from UE4's coordinate system to an "standard"
+        # (x, y ,z) -> (y, -z, x)
+        # and we remove the fourth componebonent also
+        point_camera = [point_camera[1], -point_camera[2], point_camera[0]]
+
+        # now project 3D->2D using the camera matrix
+        point_img = np.dot(K, point_camera)
+        # normalize
+        point_img[0] /= point_img[2]
+        point_img[1] /= point_img[2]
+
+        return tuple(map(int, point_img[0:2]))
+
+def spawn_scenario():
+    bikeman_bp = bp_lib.find('vehicle.bh.crossbike')
+    bikeman_loc = carla.Location(x=-32, y=80.5, z=0.4)
+    bikeman_rot = carla.Rotation(pitch=0, yaw=-90, roll=0.0)
+    bikeman_trans = carla.Transform(bikeman_loc,bikeman_rot)
+    bikeman = world.spawn_actor(bikeman_bp, bikeman_trans)
+    bikeman_velo = carla.Vector3D(x = 0.8,y=0,z=0)
+    bikeman.set_target_velocity(bikeman_velo)
+    bikeman.enable_constant_velocity(bikeman_velo)
+
+    print("spawn done")
 
 def add_checkerboard(image):
     array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
@@ -22,39 +212,188 @@ def add_checkerboard(image):
     cv2.imshow("Camera", array)
     cv2.waitKey(1)
 
-def main():
-    client = carla.Client('localhost', 2000)
-    client.set_timeout(10.0)
-    world = client.get_world()
+print("start")
+velo_m = 0
+dir_m = 0
+show_info = True
+demo_running = False
+velo_gain = 0.1                #defualt = 0.1
+numofnpc = 0
 
-    blueprint_library = world.get_blueprint_library()
-    camera_bp = blueprint_library.find('sensor.camera.rgb')
+# ros thread
+ros2_thread = threading.Thread(target=ros_thread,daemon=True)
+ros2_thread.start()
 
-    # Set camera attributes
-    camera_bp.set_attribute('image_size_x', '800')
-    camera_bp.set_attribute('image_size_y', '600')
-    camera_bp.set_attribute('fov', '90')
+# Connect the client and set up bp library and spawn point
+client = carla.Client('192.168.1.3', 2000) # for remote
+# client = carla.Client('192.168.0.180', 2000) # for offline
+client.set_timeout(10)
+client.load_world('Town10HD')
+world = client.get_world() 
 
-    # Find a vehicle to attach the camera to
-    vehicle = world.get_actors().filter('vehicle.*')[0]
 
-    # Set the transform for the camera relative to the vehicle
-    camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))
+#world.set_weather(carla.WeatherParameters.CloudyNight)
+bp_lib = world.get_blueprint_library() 
 
-    # Spawn the camera sensor and attach it to the vehicle
-    camera = world.spawn_actor(camera_bp, camera_transform, attach_to=vehicle)
 
-    # Start capturing images and add the checkerboard pattern
-    camera.listen(lambda image: add_checkerboard(image))
 
-    # Run the simulation
-    try:
-        while True:
-            world.tick()
-            time.sleep(0.1)
-    finally:
-        camera.destroy()
-        cv2.destroyAllWindows()
+spawn_points = world.get_map().get_spawn_points()  
+spawn_point = carla.Transform(carla.Location(10,29, 0.6),carla.Rotation(0,-180,0))
+# Add the ego vehicle
+vehicle_bp = bp_lib.find('vehicle.tesla.model3')
+vehicle_auto = world.try_spawn_actor(vehicle_bp, spawn_point)#spawn_points[79]
 
-if __name__ == '__main__':
-    main()
+spawn_point = carla.Transform(carla.Location(97,29, 0.6),carla.Rotation(0,-180,0))
+# Add the ego vehicle
+vehicle_bp = bp_lib.find('vehicle.tesla.model3')
+vehicle_manual = world.try_spawn_actor(vehicle_bp, spawn_point)#spawn_points[79]
+
+
+# Move the spectator behind the vehicle to view it
+spectator = world.get_spectator() 
+transform = carla.Transform(vehicle_manual.get_transform().transform(carla.Location(x=-4,z=2.5)),vehicle_manual.get_transform().rotation)
+spectator.set_transform(transform)
+
+# vehicle_bp = bp_lib.find('vehicle.tesla.model3')
+# spawn_point = carla.Transform(carla.Location(-40.8, 135, 0.6),carla.Rotation(0,-90,0))
+# vehicle_auto = world.try_spawn_actor(vehicle_bp, spawn_point)
+
+# # Add traffic
+for i in range(numofnpc): 
+    vehicle_bp = choice(bp_lib.filter('vehicle')) 
+    npc = world.try_spawn_actor(vehicle_bp, choice(spawn_points)) 
+for v in world.get_actors().filter('*vehicle*'): 
+    v.set_autopilot(True) 
+vehicle_manual.set_autopilot(False)
+vehicle_auto.set_autopilot(False)
+    # Auxilliary code for colormaps and axes
+
+VIRIDIS = np.array(cm.get_cmap('plasma').colors)
+VID_RANGE = np.linspace(0.0, 1.0, VIRIDIS.shape[0])
+
+COOL_RANGE = np.linspace(0.0, 1.0, VIRIDIS.shape[0])
+COOL = np.array(cm.get_cmap('winter')(COOL_RANGE))
+COOL = COOL[:,:3]
+
+
+
+# Spawn camera
+camera_bp = bp_lib.find('sensor.camera.rgb') 
+camera_bp.set_attribute('image_size_x', '640') # this ratio works in CARLA 9.14 on Windows 640 480
+camera_bp.set_attribute('image_size_y', '480')
+camera_bp.set_attribute('fov', '110')
+camera_init_trans = carla.Transform(carla.Location(x=-1,y=1,z=5), carla.Rotation(pitch = 0))
+# camera = world.spawn_actor(camera_bp, camera_init_trans, attach_to=vehicle_auto)
+camera = world.spawn_actor(camera_bp, camera_init_trans, attach_to=vehicle_manual)
+camera.listen(lambda image: add_checkerboard(image))
+ 
+# Add auxilliary data structures
+point_list = o3d.geometry.PointCloud()
+
+# Set up dictionary for camera data
+image_w = camera_bp.get_attribute("image_size_x").as_int()
+image_h = camera_bp.get_attribute("image_size_y").as_int()
+sensor_data = {'image': np.zeros((image_h, image_w, 4))} 
+fov = camera_bp.get_attribute("fov").as_float()
+
+# Calculate the camera projection matrix to project from 3D -> 2D
+K = build_projection_matrix(image_w, image_h, fov)
+
+world_2_camera = np.array(camera.get_transform().get_inverse_matrix())
+
+
+# Start sensors
+# lidar.listen(lambda data: lidar_callback(data, point_list, carla_node))
+camera.listen(lambda image: camera_callback(image, sensor_data, carla_node))
+
+# Initialise data
+sensor_data = {'rgb_image': np.zeros((image_h, image_w, 4))}
+display_img = sensor_data['rgb_image'].copy()
+
+#OpenCV window for camera
+# cv2.namedWindow('RGB Camera', cv2.WINDOW_AUTOSIZE)
+# cv2.imshow('RGB Camera', sensor_data['rgb_image'])
+# cv2.waitKey(1)
+
+
+# Some parameters for text on screen
+font                   = cv2.FONT_HERSHEY_SIMPLEX
+bottomLeftCornerOfText = (10,50)
+fontScale              = 0.5
+fontColor              = (255,255,255)
+thickness              = 2
+lineType               = 2
+
+# Update geometry and camera in game loop
+frame = 0
+
+event_location = [-41.5 , 90]
+event_occur = False
+
+cur_location = [87, 29]
+
+spd_m = velo_m
+spd_a = 0
+steer_m = -45
+stage_m = 1
+stage_a = 1
+spd_pub_m = 3
+spd_pub_a = 0
+spd_m = 0
+
+
+while True:
+    display_img = sensor_data['rgb_image'].copy() 
+    car_location = vehicle_auto.get_transform()
+    car_location_m = vehicle_manual.get_transform()
+
+    velocity = vehicle_manual.get_velocity()
+    acceleration = vehicle_manual.get_acceleration()
+    Ax = acceleration.x
+    print('Ax',Ax)
+
+    Vx = velocity.x
+    print('Vx',Vx)
+    print(car_location.rotation.yaw)
+
+
+    vehicle_manual.apply_ackermann_control(carla.VehicleAckermannControl(steer = dir_m, speed = velo_gain + velo_m)) 
+    #print("a : " + str(vehicle_auto.get_velocity()) )
+    
+    a_message = Twist()
+    a_message.linear.x = float(Ax)
+    m_message = Twist()
+    m_message.linear.x = float(-Vx)
+    cmd_pub_a.publish(a_message)
+    
+    
+    cmd_pub_c.publish(m_message)
+    state = Int8()
+    state.data = stage_m
+    state_pub.publish(state)
+    # vis.poll_events()
+    # vis.update_renderer()
+    #vis.capture_screen_image('lidar_img.png')
+    
+    frame += 1
+     
+    # Display RGB image with imshow
+    # cv2.imshow('RGB Camera', display_img)
+    
+    # Break the loop if the user presses the Q key
+    if cv2.waitKey(1) == ord('q'):
+        break
+
+# Close displayws and stop sensors
+cv2.destroyAllWindows()
+# lidar.stop()
+# lidar.destroy()
+camera.stop()
+camera.destroy()
+# vis.destroy_window()
+# client_socket.close()
+
+for actor in world.get_actors().filter('*vehicle*'):
+    actor.destroy()
+for actor in world.get_actors().filter('*sensor*'):
+    actor.destroy()
