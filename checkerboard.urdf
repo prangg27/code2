@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<robot name="checkerboard">
+  <!-- สร้าง Checkerboard ขนาด 5x5 -->
+  <!-- ช่องสีขาว -->
+  <link name="white_1">
+    <visual>
+      <geometry>
+        <box size="0.5 0.5 0.01"/> <!-- ขนาดช่อง 0.5x0.5 เมตร ความหนา 0.01 เมตร -->
+      </geometry>
+      <material name="white">
+        <color rgba="1 1 1 1"/>
+      </material>
+    </visual>
+    <origin xyz="0.25 0.25 0"/>
+  </link>
+  <link name="white_2">
+    <visual>
+      <geometry>
+        <box size="0.5 0.5 0.01"/>
+      </geometry>
+      <material name="white">
+        <color rgba="1 1 1 1"/>
+      </material>
+    </visual>
+    <origin xyz="1.25 0.25 0"/>
+  </link>
+  <!-- เพิ่มช่องสีขาวอื่น ๆ ที่นี่ -->
+  <!-- ช่องสีดำ -->
+  <link name="black_1">
+    <visual>
+      <geometry>
+        <box size="0.5 0.5 0.01"/> <!-- ขนาดช่อง 0.5x0.5 เมตร ความหนา 0.01 เมตร -->
+      </geometry>
+      <material name="black">
+        <color rgba="0 0 0 1"/>
+      </material>
+    </visual>
+    <origin xyz="0.75 0.25 0"/>
+  </link>
+  <link name="black_2">
+    <visual>
+      <geometry>
+        <box size="0.5 0.5 0.01"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0 0 0 1"/>
+      </material>
+    </visual>
+    <origin xyz="1.75 0.25 0"/>
+  </link>
+  <!-- เพิ่มช่องสีดำอื่น ๆ ที่นี่ -->
+</robot>
