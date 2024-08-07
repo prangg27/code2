@@ -14,6 +14,16 @@ def draw_box(world, box, rotation, thickness=0.1, color=carla.Color(), life_time
 
 # Example usage:
 # Assuming you have a BoundingBox object and a Rotation object
+  File "carla_twocar_aeb.py", line 250, in <module>
+    draw_box(world, bounding_box, rotation, thickness=0.1, color=carla.Color(r=255, g=255, b=255), life_time=-1.0, persistent_lines=True)
+  File "carla_twocar_aeb.py", line 242, in draw_box
+    world.debug.draw_box(box, transform, thickness=thickness, color=color, life_time=life_time, persistent_lines=persistent_lines)
+Boost.Python.ArgumentError: Python argument types in
+    DebugHelper.draw_box(DebugHelper, BoundingBox, Transform)
+did not match C++ signature:
+    draw_box(class carla::client::DebugHelper {lvalue}, class carla::geom::BoundingBox box, class carla::geom::Rotation rotation, float thickness=0.10000000149011612, struct carla::sensor::data::Color color=<carla.libcarla.Color object at 0x000001EAC26E2150>, float life_time=-1.0, bool persistent_lines=True)
+[foonathan::memory] Allocator foonathan::memory::new_allocator (at 0000000000000000) leaked 4864 bytes.
+[foonathan::memory] Allocator foonathan::memory::heap_allocator (at 0000000000000000) leaked 26736 bytes.
 bounding_box = carla.BoundingBox(carla.Location(94, 30, 0.6), carla.Vector3D(1, 1, 1))
 rotation = carla.Rotation(0, 0, 0)  # Yaw, pitch, roll
 
