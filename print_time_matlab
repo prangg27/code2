@@ -3,3 +3,19 @@ Assertion failed: (_clients.find(token.get_stream_id())) == (_clients.end()), fi
 https://github.com/AbanobSoliman/IBISCape?tab=readme-ov-file
 find('static.prop.calibrator')
 https://carla.readthedocs.io/en/0.9.1/python_api/
+import carla
+
+def draw_box(world, box, rotation, thickness=0.1, color=carla.Color(), life_time=-1.0, persistent_lines=True):
+    # Create a Transform for the box
+    transform = carla.Transform(box.location, rotation)
+    
+    # Draw the box
+    world.debug.draw_box(box, transform, thickness=thickness, color=color, life_time=life_time, persistent_lines=persistent_lines)
+
+# Example usage:
+# Assuming you have a BoundingBox object and a Rotation object
+bounding_box = carla.BoundingBox(carla.Location(94, 30, 0.6), carla.Vector3D(1, 1, 1))
+rotation = carla.Rotation(0, 0, 0)  # Yaw, pitch, roll
+
+# Draw the box
+draw_box(world, bounding_box, rotation, thickness=0.1, color=carla.Color(r=255, g=255, b=255), life_time=-1.0, persistent_lines=True)
