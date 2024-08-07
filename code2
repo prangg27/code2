@@ -216,7 +216,7 @@ world = client.get_world()
 
 #world.set_weather(carla.WeatherParameters.CloudyNight)
 bp_lib = world.get_blueprint_library() 
-spawn_point = carla.Transform(carla.Location(92,30,2),carla.Rotation(180,80,-90))
+#spawn_point = carla.Transform(carla.Location(92,30,2),carla.Rotation(180,80,-90))
 # Add the ego vehicle
 #board_bp = bp_lib.find('static.prop.calibrator')
 #checkerboard = bp_lib.find('static.checkerboard')
@@ -225,15 +225,16 @@ spawn_point = carla.Transform(carla.Location(92,30,2),carla.Rotation(180,80,-90)
 
 
 spawn_points = world.get_map().get_spawn_points()  
-#spawn_point = carla.Transform(carla.Location(87,29, 0.6),carla.Rotation(0,-180,0))
-# Add the ego vehicle
-# vehicle_bp = bp_lib.find('vehicle.tesla.model3')
-# vehicle_auto = world.try_spawn_actor(vehicle_bp, spawn_point)#spawn_points[79]
-
-spawn_point = carla.Transform(carla.Location(97,29, 0.6),carla.Rotation(0,-180,0))
-world.debug.draw_line(carla.Transform(carla.Location(97,29, 0.6)), carla.Transform(carla.Location(7,29, 0.6)), thickness=0.1, color=carla.Color(), life_time=-1.0, persistent_lines=True)
+spawn_point = carla.Transform(carla.Location(37,29, 0.6),carla.Rotation(0,-180,0))
 # Add the ego vehicle
 vehicle_bp = bp_lib.find('vehicle.tesla.model3')
+vehicle_auto = world.try_spawn_actor(vehicle_bp, spawn_point)#spawn_points[79]
+
+spawn_point = carla.Transform(carla.Location(97,29, 0.6),carla.Rotation(0,-180,0))
+world.debug.draw_line(carla.Location(86,30, 0.6),carla.Location(48,30, 0.6), thickness=0.1, color=carla.Color(), life_time=-1.0, persistent_lines=True)
+#world.debug.draw_line(carla.Location(94,30, 0.6),carla.Location(87,30, 0.6), thickness=0.1, color=carla.Color(), life_time=-1.0, persistent_lines=True)
+# Add the ego vehicle
+#vehicle_bp = bp_lib.find('vehicle.tesla.model3')
 vehicle_manual = world.try_spawn_actor(vehicle_bp, spawn_point)#spawn_points[79]
 
 
@@ -269,7 +270,7 @@ COOL = COOL[:,:3]
 camera_bp = bp_lib.find('sensor.camera.rgb') 
 camera_bp.set_attribute('image_size_x', '640') # this ratio works in CARLA 9.14 on Windows 640 480
 camera_bp.set_attribute('image_size_y', '480')
-camera_bp.set_attribute('fov', '30')
+camera_bp.set_attribute('fov', '55')
 camera_init_trans = carla.Transform(carla.Location(x=-1,y=1,z=5), carla.Rotation(pitch = 0))
 # camera = world.spawn_actor(camera_bp, camera_init_trans, attach_to=vehicle_auto)
 camera = world.spawn_actor(camera_bp, camera_init_trans, attach_to=vehicle_manual)
@@ -384,13 +385,3 @@ for actor in world.get_actors().filter('*vehicle*'):
     actor.destroy()
 for actor in world.get_actors().filter('*sensor*'):
     actor.destroy()
-
-Traceback (most recent call last):
-  File "carla_twocar_aeb.py", line 234, in <module>
-    world.debug.draw_line(carla.Transform(carla.Location(97,29, 0.6)), carla.Transform(carla.Location(7,29, 0.6)), thickness=0.1, color=carla.Color(), life_time=-1.0, persistent_lines=True)
-Boost.Python.ArgumentError: Python argument types in
-    DebugHelper.draw_line(DebugHelper, Transform, Transform)
-did not match C++ signature:
-    draw_line(class carla::client::DebugHelper {lvalue}, class carla::geom::Location begin, class carla::geom::Location end, float thickness=0.10000000149011612, struct carla::sensor::data::Color color=<carla.libcarla.Color object at 0x000001AD33993210>, float life_time=-1.0, bool persistent_lines=True)
-[foonathan::memory] Allocator foonathan::memory::new_allocator (at 0000000000000000) leaked 3648 bytes.
-[foonathan::memory] Allocator foonathan::memory::heap_allocator (at 0000000000000000) leaked 19360 bytes.
