@@ -1,0 +1,28 @@
+from fastapi import FastAPI
+import uvicorn
+import subprocess
+
+app = FastAPI()
+
+import os
+import sys
+
+
+@app.get("/")
+async def root():
+    print('recieve')
+    #simulink_file = r"C:\\FY24\\ros2_steering_wheel_2.slx"
+    # ros2terminal = r"C:\Users\ADAS-TDET-WG-01\Desktop\ROS2.lnk"
+    # matlab_command = (
+    #     f"matlab -batch \"try, open_system('{simulink_file}'); sim('{simulink_file}'); catch ME, disp(ME.message); end\""
+    # )
+    subprocess.run(r'start cmd /k "C:\Users\ADAS-TDET-WG-01\Desktop\ROS2.lnk"', shell=True)
+    # Running the Simulink model via MATLAB
+    #subprocess.run(matlab_command, shell=True)
+    #os.system(r"C:\Users\ADAS-TDET-WG-01\Desktop\ROS2.lnk")
+    print('Simulink model is running')
+
+    return {"message": "Simulink model started"}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="192.168.1.3", port=800)
