@@ -1,1 +1,11 @@
-https://stackoverflow.com/questions/43861164/passing-data-between-separately-running-python-scripts
+import os
+
+command = (
+    r'cmd /k cd /d C:\Windows\System32\carla_ws\src\carla_pkg\scripts && '
+    r'set PYTHONPATH=%PYTHONPATH%;C:\Users\ADAS-TDET-WG-01\Desktop\WindowsNoEditor\PythonAPI\carla\dist\carla-0.9.15-py3.8-win-amd64.egg;'
+    r'C:\Users\ADAS-TDET-WG-01\Desktop\WindowsNoEditor\PythonAPI\Carla && '
+    r'"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 && '
+    r'set ChocolateyInstall=c:\opt\chocolatey && c:\opt\ros\foxy\x64\setup.bat && python carla_twocar_aeb.py'
+)
+
+os.system(command)
