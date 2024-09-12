@@ -12,3 +12,8 @@ def close_script(script_name):
                 print(f"Terminated process with PID {pid}")
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                 print(f"Failed to terminate process: {e}")
+for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            cmdline = proc.info['cmdline']
+            if cmdline and script_name in cmdline:
+                print(f"{script_name} is running.")
+                found = True
