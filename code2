@@ -1,7 +1,1 @@
-def close_script(script_name):
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-        cmdline = proc.info['cmdline']
-        if cmdline and script_name in cmdline:
-            pid = proc.info['pid']
-            os.kill(pid, signal.SIGTERM)  # Or signal.SIGKILL to force close
-            print(f"Closed {script_name} with PID {pid}")
+https://www.canva.com/design/DAGR8JUVHqE/NLxu34Rzb5bWhwL9KuMnfg/edit?utm_content=DAGR8JUVHqE&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton
